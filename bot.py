@@ -1,10 +1,11 @@
 import os
 import logging
 from datetime import datetime
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters
+    ConversationHandler, ContextTypes, filters,
+    CallbackQueryHandler
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -12,157 +13,177 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 REPORT_CHAT_ID = os.environ.get("REPORT_CHAT_ID")
-REPORT_THREAD_ID = os.environ.get("REPORT_THREAD_ID")
 
 (
-    ACCOUNT, START_TIME, END_TIME, CONNECTIONS,
-    FOLLOWS, STORIES, LIKES, COMMENTS,
-    SCREENSHOT_ACTIVITY, SCREENSHOT_PROFILE, PROBLEMS
-) = range(11)
+    ACCOUNT, VIEWS, FOLLOWERS,
+    SCREENSHOT_ACTIVITY, SCREENSHOT_PROFILE, PROBLEMS, PROBLEM_TEXT
+) = range(7)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data['va_name'] = update.effective_user.first_name
     context.user_data['date'] = datetime.now().strftime("%d/%m/%Y")
+
     await update.message.reply_text(
-        "DAILY REPORT - AMA\n\nQuel compte Instagram as-tu gere aujourd'hui? (ex: @nom_du_compte)"
+        "📋 *DAILY REPORT*\n\n"
+        "👤 Quel compte Instagram as-tu géré aujourd'hui?\n"
+        "_(ex: @elena)_",
+        parse_mode="Markdown"
     )
     return ACCOUNT
 
+
 async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['account'] = update.message.text
-    await update.message.reply_text("Heure de debut de session? (ex: 14:00)")
-    return START_TIME
 
-async def get_start_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['start_time'] = update.message.text
-    await update.message.reply_text("Heure de fin? (ex: 16:30)")
-    return END_TIME
-
-async def get_end_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['end_time'] = update.message.text
-    await update.message.reply_text("Combien de fois tu t'es connecte au compte aujourd'hui?")
-    return CONNECTIONS
-
-async def get_connections(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['connections'] = update.message.text
-    await update.message.reply_text("Combien de follows as-tu fait?")
-    return FOLLOWS
-
-async def get_follows(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['follows'] = update.message.text
-    await update.message.reply_text("Combien de stories as-tu vues?")
-    return STORIES
-
-async def get_stories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['stories'] = update.message.text
-    await update.message.reply_text("Combien de posts as-tu likes?")
-    return LIKES
-
-async def get_likes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['likes'] = update.message.text
-    await update.message.reply_text("Combien de commentaires as-tu laisses?")
-    return COMMENTS
-
-async def get_comments(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['comments'] = update.message.text
     await update.message.reply_text(
-        "Envoie le screenshot de ton activite Instagram (Parametres -> Votre activite)"
+        "👁️ Combien de *vues* sur les posts aujourd'hui?",
+        parse_mode="Markdown"
+    )
+    return VIEWS
+
+
+async def get_views(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['views'] = update.message.text
+
+    await update.message.reply_text(
+        "📈 Combien d'*abonnés gagnés* aujourd'hui?",
+        parse_mode="Markdown"
+    )
+    return FOLLOWERS
+
+
+async def get_followers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['followers'] = update.message.text
+
+    await update.message.reply_text(
+        "📊 Envoie le *screenshot de ton activité* Instagram\n"
+        "_(Paramètres → Votre activité)_",
+        parse_mode="Markdown"
     )
     return SCREENSHOT_ACTIVITY
+
 
 async def get_screenshot_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data['photo_activity'] = update.message.photo[-1].file_id
-        await update.message.reply_text("Maintenant envoie le screenshot de la page profil du compte")
+        await update.message.reply_text(
+            "🖼️ Maintenant envoie le *screenshot du profil* du compte",
+            parse_mode="Markdown"
+        )
         return SCREENSHOT_PROFILE
     else:
-        await update.message.reply_text("Envoie une photo (screenshot), pas du texte.")
+        await update.message.reply_text("⚠️ Envoie une *photo*, pas du texte.", parse_mode="Markdown")
         return SCREENSHOT_ACTIVITY
+
 
 async def get_screenshot_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data['photo_profile'] = update.message.photo[-1].file_id
-        await update.message.reply_text("Des problemes aujourd'hui? (Ecris 'Aucun' si tout va bien)")
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Aucun problème", callback_data="no_problem")],
+            [InlineKeyboardButton("⚠️ Oui, j'ai un problème", callback_data="yes_problem")]
+        ]
+        await update.message.reply_text(
+            "🚨 Des *problèmes* aujourd'hui?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
         return PROBLEMS
     else:
-        await update.message.reply_text("Envoie une photo (screenshot), pas du texte.")
+        await update.message.reply_text("⚠️ Envoie une *photo*, pas du texte.", parse_mode="Markdown")
         return SCREENSHOT_PROFILE
 
+
 async def get_problems(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "no_problem":
+        context.user_data['problems'] = "Aucun"
+        await query.edit_message_text("✅ Parfait, aucun problème!")
+        await send_report(update, context)
+        return ConversationHandler.END
+    else:
+        await query.edit_message_text("✍️ Décris le problème :")
+        return PROBLEM_TEXT
+
+
+async def get_problem_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['problems'] = update.message.text
+    await send_report(update, context)
+    return ConversationHandler.END
+
+
+async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = context.user_data
-    try:
-        fmt = "%H:%M"
-        start = datetime.strptime(d['start_time'], fmt)
-        end = datetime.strptime(d['end_time'], fmt)
-        duration = end - start
-        hours = int(duration.total_seconds() // 3600)
-        minutes = int((duration.total_seconds() % 3600) // 60)
-        duration_str = str(hours) + "h" + str(minutes).zfill(2)
-    except Exception:
-        duration_str = d['start_time'] + " -> " + d['end_time']
 
     report = (
-        "REPORT - " + d['va_name'] + "\n"
-        "Date: " + d['date'] + " | Duree: " + duration_str + "\n"
-        "Compte: " + d['account'] + "\n"
-        "---------------\n"
-        "Connexions: " + d['connections'] + "\n"
-        "Follows: " + d['follows'] + "\n"
-        "Stories vues: " + d['stories'] + "\n"
-        "Posts likes: " + d['likes'] + "\n"
-        "Commentaires: " + d['comments'] + "\n"
-        "---------------\n"
-        "Problemes: " + d['problems'] + "\n"
-        "Envoye a: " + datetime.now().strftime('%H:%M')
+        f"📋 *REPORT — {d['va_name']}*\n"
+        f"📅 {d['date']} • {datetime.now().strftime('%H:%M')}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 Compte : {d['account']}\n"
+        f"👁️ Vues : {d['views']}\n"
+        f"📈 Abonnés gagnés : {d['followers']}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🚨 Problèmes : {d['problems']}"
     )
 
-    kwargs = {"chat_id": int(REPORT_CHAT_ID), "text": report}
-    if REPORT_THREAD_ID:
-        kwargs["message_thread_id"] = int(REPORT_THREAD_ID)
-    await context.bot.send_message(**kwargs)
+    await context.bot.send_message(
+        chat_id=int(REPORT_CHAT_ID),
+        text=report,
+        parse_mode="Markdown"
+    )
 
     for key in ['photo_activity', 'photo_profile']:
         if key in d:
-            photo_kwargs = {"chat_id": int(REPORT_CHAT_ID), "photo": d[key]}
-            if REPORT_THREAD_ID:
-                photo_kwargs["message_thread_id"] = int(REPORT_THREAD_ID)
-            await context.bot.send_photo(**photo_kwargs)
+            await context.bot.send_photo(
+                chat_id=int(REPORT_CHAT_ID),
+                photo=d[key]
+            )
 
-    await update.message.reply_text(
-        "Report enregistre! Duree: " + duration_str + " - Merci " + d['va_name']
+    # Confirm to VA
+    effective_message = update.callback_query.message if update.callback_query else update.message
+    await effective_message.reply_text(
+        f"🎉 *Report envoyé!* Merci {d['va_name']} 🙌",
+        parse_mode="Markdown"
     )
-    return ConversationHandler.END
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Report annule. Tape /report pour recommencer.")
+    await update.message.reply_text("❌ Report annulé. Tape /start pour recommencer.")
     return ConversationHandler.END
+
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("report", start), CommandHandler("start", start)],
+        entry_points=[CommandHandler("start", start), CommandHandler("report", start)],
         states={
             ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account)],
-            START_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_start_time)],
-            END_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_end_time)],
-            CONNECTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_connections)],
-            FOLLOWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_follows)],
-            STORIES: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_stories)],
-            LIKES: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_likes)],
-            COMMENTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_comments)],
-            SCREENSHOT_ACTIVITY: [MessageHandler(filters.PHOTO, get_screenshot_activity),
-                                   MessageHandler(filters.TEXT & ~filters.COMMAND, get_screenshot_activity)],
-            SCREENSHOT_PROFILE: [MessageHandler(filters.PHOTO, get_screenshot_profile),
-                                  MessageHandler(filters.TEXT & ~filters.COMMAND, get_screenshot_profile)],
-            PROBLEMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_problems)],
+            VIEWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_views)],
+            FOLLOWERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_followers)],
+            SCREENSHOT_ACTIVITY: [
+                MessageHandler(filters.PHOTO, get_screenshot_activity),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_screenshot_activity)
+            ],
+            SCREENSHOT_PROFILE: [
+                MessageHandler(filters.PHOTO, get_screenshot_profile),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_screenshot_profile)
+            ],
+            PROBLEMS: [CallbackQueryHandler(get_problems)],
+            PROBLEM_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_problem_text)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+
     app.add_handler(conv_handler)
-    logger.info("Bot demarre...")
+    logger.info("Bot démarré...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
