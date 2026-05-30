@@ -1,4 +1,4 @@
-import os
+ import os
 import logging
 from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,7 +16,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 REPORT_CHAT_ID = os.environ.get("REPORT_CHAT_ID")
 TIMEZONE = pytz.timezone("Asia/Bangkok")
 
-# {chat_id: {"name": str, "reported_today": [{"account": ..., "views": ..., "followers": ..., "problems": ..., "time": ...}]}}
 va_registry = {}
 
 (
@@ -30,9 +29,9 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
         reported = data.get("reported_today", [])
         name = data.get("name", "VA")
         if not reported:
-            msg = f"⏰ *Reminder, {name}!*\n\nYou haven't submitted your daily report yet!\nType /start now 👇"
+            msg = f"⏰ *Reminder, {name}!*\n\nYou haven't submitted your daily report yet!\nTap /start now 👇"
         elif len(reported) == 1:
-            msg = f"⏰ *Reminder, {name}!*\n\nYou only submitted 1 report today ({reported[0]['account']}).\nManage a second account? Type /start!"
+            msg = f"⏰ *Reminder, {name}!*\n\nYou only submitted 1 report today ({reported[0]['account']}).\nManage a second account? Tap /start!"
         else:
             continue
         try:
@@ -54,7 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ You already submitted reports for both accounts today!\nSee you tomorrow 🙌")
         return ConversationHandler.END
 
-    # If we already know the name, skip that step
+    # Known VA — skip name step
     if va_registry[chat_id].get("name"):
         context.user_data['name'] = va_registry[chat_id]["name"]
         context.user_data['date'] = datetime.now(TIMEZONE).strftime("%d/%m/%Y")
@@ -74,11 +73,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return ACCOUNT
 
+    # New VA — show welcome with button
+    keyboard = [[InlineKeyboardButton("📋 Start my report", callback_data="begin_report")]]
     await update.message.reply_text(
-        "👋 *Welcome!*\n\nWhat's your *first and last name*?",
+        "👋 *Welcome to Reports VA!*\n\n"
+        "Every day after your session, submit your daily report here.\n"
+        "It takes less than 2 minutes ✅\n\n"
+        "Tap the button to get started 👇",
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
     return NAME
+
+
+async def begin_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "✏️ What's your *first and last name*?",
+        parse_mode="Markdown"
+    )
 
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -89,8 +103,6 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     va_registry[chat_id]["name"] = name
 
     await update.message.reply_text(
-        f"📋 *DAILY REPORT*\n\n"
-        f"Hey {name}! 👋\n"
         f"👤 Which Instagram account did you manage today?\n_(ex: @elena)_",
         parse_mode="Markdown"
     )
@@ -171,7 +183,7 @@ async def get_problems(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Perfect, no issues!")
         await send_report(update, context)
         return ConversationHandler.END
-    else:
+    elif query.data == "yes_problem":
         await query.edit_message_text("✍️ Describe the issue:")
         return PROBLEM_TEXT
 
@@ -284,7 +296,10 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("report", start)],
         states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            NAME: [
+                CallbackQueryHandler(begin_report, pattern="^begin_report$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)
+            ],
             ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account)],
             VIEWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_views)],
             FOLLOWERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_followers)],
