@@ -1,165 +1,275 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters,
-    CallbackQueryHandler
+    CallbackQueryHandler, JobQueue
 )
-
+import pytz
+ 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+ 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 REPORT_CHAT_ID = os.environ.get("REPORT_CHAT_ID")
-
+TIMEZONE = pytz.timezone("Asia/Bangkok")
+ 
+# Store VA chat IDs and their report status
+va_registry = {}  # {chat_id: {"name": str, "reported_today": [account1, account2]}}
+ 
 (
     ACCOUNT, VIEWS, FOLLOWERS,
-    SCREENSHOT_ACTIVITY, SCREENSHOT_PROFILE, PROBLEMS, PROBLEM_TEXT
-) = range(7)
-
-
+    SCREENSHOT_ACTIVITY, SCREENSHOT_PROFILE, PROBLEMS, PROBLEM_TEXT,
+    SECOND_ACCOUNT
+) = range(8)
+ 
+ 
+def reset_daily_reports():
+    for chat_id in va_registry:
+        va_registry[chat_id]["reported_today"] = []
+ 
+ 
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
+    reset_daily_reports()
+    for chat_id, data in va_registry.items():
+        reported = data.get("reported_today", [])
+        if not reported:
+            msg = f"⏰ *Reminder!*\n\nYou haven't submitted your daily report yet!\nType /start now 👇"
+        elif len(reported) == 1:
+            msg = f"⏰ *Reminder!*\n\nYou only submitted 1 report today ({reported[0]}).\nDo you manage a second account? Type /start to submit it!"
+        else:
+            continue  # Already submitted 2 reports, no reminder needed
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"Could not send reminder to {chat_id}: {e}")
+ 
+ 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    context.user_data['va_name'] = update.effective_user.first_name
-    context.user_data['date'] = datetime.now().strftime("%d/%m/%Y")
-
-    await update.message.reply_text(
-        "📋 *DAILY REPORT*\n\n"
-        "👤 Quel compte Instagram as-tu géré aujourd'hui?\n"
-        "_(ex: @elena)_",
-        parse_mode="Markdown"
-    )
+    chat_id = update.effective_chat.id
+    va_name = update.effective_user.first_name
+ 
+    # Register VA
+    if chat_id not in va_registry:
+        va_registry[chat_id] = {"name": va_name, "reported_today": []}
+ 
+    context.user_data['va_name'] = va_name
+    context.user_data['date'] = datetime.now(TIMEZONE).strftime("%d/%m/%Y")
+    context.user_data['chat_id'] = chat_id
+ 
+    reported = va_registry[chat_id].get("reported_today", [])
+    if len(reported) >= 2:
+        await update.message.reply_text(
+            "✅ You already submitted reports for both accounts today!\n"
+            "See you tomorrow 🙌"
+        )
+        return ConversationHandler.END
+ 
+    if reported:
+        await update.message.reply_text(
+            f"📋 *DAILY REPORT — Account 2*\n\n"
+            f"You already reported for *{reported[0]}* today.\n"
+            f"👤 What's the second account you managed?\n_(ex: @elena)_",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "📋 *DAILY REPORT*\n\n"
+            "👤 Which Instagram account did you manage today?\n"
+            "_(ex: @elena)_",
+            parse_mode="Markdown"
+        )
     return ACCOUNT
-
-
+ 
+ 
 async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['account'] = update.message.text
-
+    account = update.message.text.strip()
+ 
+    # Validate not already reported for this account
+    chat_id = context.user_data['chat_id']
+    reported = va_registry[chat_id].get("reported_today", [])
+    if account in reported:
+        await update.message.reply_text(
+            f"⚠️ You already submitted a report for *{account}* today!\n"
+            "Please enter a different account.",
+            parse_mode="Markdown"
+        )
+        return ACCOUNT
+ 
+    context.user_data['account'] = account
     await update.message.reply_text(
-        "👁️ Combien de *vues* sur les posts aujourd'hui?",
+        "👁️ How many *views* on the posts today?",
         parse_mode="Markdown"
     )
     return VIEWS
-
-
+ 
+ 
 async def get_views(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['views'] = update.message.text
-
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("⚠️ Please enter a *number* only. (ex: 400)", parse_mode="Markdown")
+        return VIEWS
+    context.user_data['views'] = text
     await update.message.reply_text(
-        "📈 Combien d'*abonnés gagnés* aujourd'hui?",
+        "📈 How many *new followers* today?",
         parse_mode="Markdown"
     )
     return FOLLOWERS
-
-
+ 
+ 
 async def get_followers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['followers'] = update.message.text
-
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("⚠️ Please enter a *number* only. (ex: 50)", parse_mode="Markdown")
+        return FOLLOWERS
+    context.user_data['followers'] = text
     await update.message.reply_text(
-        "📊 Envoie le *screenshot de ton activité* Instagram\n"
-        "_(Paramètres → Votre activité)_",
+        "📊 Send the *activity screenshot*\n"
+        "_(Settings → Your activity)_",
         parse_mode="Markdown"
     )
     return SCREENSHOT_ACTIVITY
-
-
+ 
+ 
 async def get_screenshot_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data['photo_activity'] = update.message.photo[-1].file_id
         await update.message.reply_text(
-            "🖼️ Maintenant envoie le *screenshot du profil* du compte",
+            "🖼️ Now send the *profile screenshot* of the account",
             parse_mode="Markdown"
         )
         return SCREENSHOT_PROFILE
     else:
-        await update.message.reply_text("⚠️ Envoie une *photo*, pas du texte.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Please send a *photo*, not text.", parse_mode="Markdown")
         return SCREENSHOT_ACTIVITY
-
-
+ 
+ 
 async def get_screenshot_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data['photo_profile'] = update.message.photo[-1].file_id
-
         keyboard = [
-            [InlineKeyboardButton("✅ Aucun problème", callback_data="no_problem")],
-            [InlineKeyboardButton("⚠️ Oui, j'ai un problème", callback_data="yes_problem")]
+            [InlineKeyboardButton("✅ No issues", callback_data="no_problem")],
+            [InlineKeyboardButton("⚠️ Yes, I have an issue", callback_data="yes_problem")]
         ]
         await update.message.reply_text(
-            "🚨 Des *problèmes* aujourd'hui?",
+            "🚨 Any *issues* today?",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
         return PROBLEMS
     else:
-        await update.message.reply_text("⚠️ Envoie une *photo*, pas du texte.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Please send a *photo*, not text.", parse_mode="Markdown")
         return SCREENSHOT_PROFILE
-
-
+ 
+ 
 async def get_problems(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data == "no_problem":
-        context.user_data['problems'] = "Aucun"
-        await query.edit_message_text("✅ Parfait, aucun problème!")
+        context.user_data['problems'] = "None"
+        await query.edit_message_text("✅ Perfect, no issues!")
         await send_report(update, context)
         return ConversationHandler.END
     else:
-        await query.edit_message_text("✍️ Décris le problème :")
+        await query.edit_message_text("✍️ Describe the issue:")
         return PROBLEM_TEXT
-
-
+ 
+ 
 async def get_problem_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['problems'] = update.message.text
     await send_report(update, context)
     return ConversationHandler.END
-
-
+ 
+ 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = context.user_data
-
+    chat_id = d['chat_id']
+ 
+    # Mark as reported
+    if chat_id in va_registry:
+        va_registry[chat_id]["reported_today"].append(d['account'])
+ 
+    reported_count = len(va_registry[chat_id]["reported_today"])
+ 
     report = (
         f"📋 *REPORT — {d['va_name']}*\n"
-        f"📅 {d['date']} • {datetime.now().strftime('%H:%M')}\n"
+        f"📅 {d['date']} • {datetime.now(TIMEZONE).strftime('%H:%M')}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👤 Compte : {d['account']}\n"
-        f"👁️ Vues : {d['views']}\n"
-        f"📈 Abonnés gagnés : {d['followers']}\n"
+        f"👤 Account: {d['account']}\n"
+        f"👁️ Views: {d['views']}\n"
+        f"📈 New followers: {d['followers']}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"🚨 Problèmes : {d['problems']}"
+        f"🚨 Issues: {d['problems']}"
     )
-
+ 
     await context.bot.send_message(
         chat_id=int(REPORT_CHAT_ID),
         text=report,
         parse_mode="Markdown"
     )
-
+ 
     for key in ['photo_activity', 'photo_profile']:
         if key in d:
             await context.bot.send_photo(
                 chat_id=int(REPORT_CHAT_ID),
                 photo=d[key]
             )
-
-    # Confirm to VA
+ 
     effective_message = update.callback_query.message if update.callback_query else update.message
-    await effective_message.reply_text(
-        f"🎉 *Report envoyé!* Merci {d['va_name']} 🙌",
-        parse_mode="Markdown"
-    )
-
-
+ 
+    if reported_count < 2:
+        await effective_message.reply_text(
+            f"🎉 *Report sent!* Thank you {d['va_name']} 🙌\n\n"
+            f"Do you manage a second account? Type /start to submit another report!",
+            parse_mode="Markdown"
+        )
+    else:
+        await effective_message.reply_text(
+            f"🎉 *All reports submitted!* Thank you {d['va_name']} 🙌\n"
+            f"See you tomorrow!",
+            parse_mode="Markdown"
+        )
+ 
+ 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_chat.id) != str(REPORT_CHAT_ID) and str(update.effective_user.id) != str(REPORT_CHAT_ID):
+        # Allow anyone for now, can restrict later
+        pass
+ 
+    today = datetime.now(TIMEZONE).strftime("%d/%m/%Y")
+    if not va_registry:
+        await update.message.reply_text("📊 No VAs have reported yet today.")
+        return
+ 
+    lines = [f"📊 *STATS — {today}*\n━━━━━━━━━━━━━━━"]
+    for chat_id, data in va_registry.items():
+        reported = data.get("reported_today", [])
+        name = data.get("name", "Unknown")
+        if reported:
+            accounts = ", ".join(reported)
+            lines.append(f"✅ {name} — {accounts} ({len(reported)}/2)")
+        else:
+            lines.append(f"❌ {name} — No report yet")
+ 
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+ 
+ 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Report annulé. Tape /start pour recommencer.")
+    await update.message.reply_text("❌ Report cancelled. Type /start to restart.")
     return ConversationHandler.END
-
-
+ 
+ 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
+ 
+    # Schedule daily reminder at 23:00 Bangkok time
+    job_queue = app.job_queue
+    reminder_time = time(hour=23, minute=0, tzinfo=TIMEZONE)
+    job_queue.run_daily(send_reminder, time=reminder_time)
+ 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("report", start)],
         states={
@@ -179,11 +289,13 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-
+ 
     app.add_handler(conv_handler)
-    logger.info("Bot démarré...")
+    app.add_handler(CommandHandler("stats", stats))
+ 
+    logger.info("Bot started...")
     app.run_polling()
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
