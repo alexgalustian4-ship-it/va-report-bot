@@ -8,29 +8,29 @@ from telegram.ext import (
     CallbackQueryHandler, JobQueue
 )
 import pytz
- 
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
- 
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 REPORT_CHAT_ID = os.environ.get("REPORT_CHAT_ID")
 TIMEZONE = pytz.timezone("Asia/Bangkok")
- 
+
 # Store VA chat IDs and their report status
 va_registry = {}  # {chat_id: {"name": str, "reported_today": [account1, account2]}}
- 
+
 (
     ACCOUNT, VIEWS, FOLLOWERS,
     SCREENSHOT_ACTIVITY, SCREENSHOT_PROFILE, PROBLEMS, PROBLEM_TEXT,
     SECOND_ACCOUNT
 ) = range(8)
- 
- 
+
+
 def reset_daily_reports():
     for chat_id in va_registry:
         va_registry[chat_id]["reported_today"] = []
- 
- 
+
+
 async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
     reset_daily_reports()
     for chat_id, data in va_registry.items():
@@ -45,21 +45,21 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
         except Exception as e:
             logger.warning(f"Could not send reminder to {chat_id}: {e}")
- 
- 
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     chat_id = update.effective_chat.id
     va_name = update.effective_user.first_name
- 
+
     # Register VA
     if chat_id not in va_registry:
         va_registry[chat_id] = {"name": va_name, "reported_today": []}
- 
+
     context.user_data['va_name'] = va_name
     context.user_data['date'] = datetime.now(TIMEZONE).strftime("%d/%m/%Y")
     context.user_data['chat_id'] = chat_id
- 
+
     reported = va_registry[chat_id].get("reported_today", [])
     if len(reported) >= 2:
         await update.message.reply_text(
@@ -67,7 +67,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "See you tomorrow 🙌"
         )
         return ConversationHandler.END
- 
+
     if reported:
         await update.message.reply_text(
             f"📋 *DAILY REPORT — Account 2*\n\n"
@@ -83,11 +83,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     return ACCOUNT
- 
- 
+
+
 async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     account = update.message.text.strip()
- 
+
     # Validate not already reported for this account
     chat_id = context.user_data['chat_id']
     reported = va_registry[chat_id].get("reported_today", [])
@@ -98,15 +98,15 @@ async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return ACCOUNT
- 
+
     context.user_data['account'] = account
     await update.message.reply_text(
         "👁️ How many *views* on the posts today?",
         parse_mode="Markdown"
     )
     return VIEWS
- 
- 
+
+
 async def get_views(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.isdigit():
@@ -118,8 +118,8 @@ async def get_views(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
     return FOLLOWERS
- 
- 
+
+
 async def get_followers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.isdigit():
@@ -127,13 +127,14 @@ async def get_followers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return FOLLOWERS
     context.user_data['followers'] = text
     await update.message.reply_text(
-        "📊 Send the *activity screenshot*\n"
-        "_(Settings → Your activity)_",
+        "📊 Send the *Time Management screenshot*\n\n"
+        "👉 Settings → Your Activity → *Time Management*\n"
+        "📸 Screenshot the time spent today",
         parse_mode="Markdown"
     )
     return SCREENSHOT_ACTIVITY
- 
- 
+
+
 async def get_screenshot_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data['photo_activity'] = update.message.photo[-1].file_id
@@ -145,8 +146,8 @@ async def get_screenshot_activity(update: Update, context: ContextTypes.DEFAULT_
     else:
         await update.message.reply_text("⚠️ Please send a *photo*, not text.", parse_mode="Markdown")
         return SCREENSHOT_ACTIVITY
- 
- 
+
+
 async def get_screenshot_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data['photo_profile'] = update.message.photo[-1].file_id
@@ -163,8 +164,8 @@ async def get_screenshot_profile(update: Update, context: ContextTypes.DEFAULT_T
     else:
         await update.message.reply_text("⚠️ Please send a *photo*, not text.", parse_mode="Markdown")
         return SCREENSHOT_PROFILE
- 
- 
+
+
 async def get_problems(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -176,24 +177,24 @@ async def get_problems(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("✍️ Describe the issue:")
         return PROBLEM_TEXT
- 
- 
+
+
 async def get_problem_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['problems'] = update.message.text
     await send_report(update, context)
     return ConversationHandler.END
- 
- 
+
+
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = context.user_data
     chat_id = d['chat_id']
- 
+
     # Mark as reported
     if chat_id in va_registry:
         va_registry[chat_id]["reported_today"].append(d['account'])
- 
+
     reported_count = len(va_registry[chat_id]["reported_today"])
- 
+
     report = (
         f"📋 *REPORT — {d['va_name']}*\n"
         f"📅 {d['date']} • {datetime.now(TIMEZONE).strftime('%H:%M')}\n"
@@ -204,22 +205,22 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━\n"
         f"🚨 Issues: {d['problems']}"
     )
- 
+
     await context.bot.send_message(
         chat_id=int(REPORT_CHAT_ID),
         text=report,
         parse_mode="Markdown"
     )
- 
+
     for key in ['photo_activity', 'photo_profile']:
         if key in d:
             await context.bot.send_photo(
                 chat_id=int(REPORT_CHAT_ID),
                 photo=d[key]
             )
- 
+
     effective_message = update.callback_query.message if update.callback_query else update.message
- 
+
     if reported_count < 2:
         await effective_message.reply_text(
             f"🎉 *Report sent!* Thank you {d['va_name']} 🙌\n\n"
@@ -232,18 +233,18 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"See you tomorrow!",
             parse_mode="Markdown"
         )
- 
- 
+
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_chat.id) != str(REPORT_CHAT_ID) and str(update.effective_user.id) != str(REPORT_CHAT_ID):
         # Allow anyone for now, can restrict later
         pass
- 
+
     today = datetime.now(TIMEZONE).strftime("%d/%m/%Y")
     if not va_registry:
         await update.message.reply_text("📊 No VAs have reported yet today.")
         return
- 
+
     lines = [f"📊 *STATS — {today}*\n━━━━━━━━━━━━━━━"]
     for chat_id, data in va_registry.items():
         reported = data.get("reported_today", [])
@@ -253,23 +254,23 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"✅ {name} — {accounts} ({len(reported)}/2)")
         else:
             lines.append(f"❌ {name} — No report yet")
- 
+
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
- 
- 
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Report cancelled. Type /start to restart.")
     return ConversationHandler.END
- 
- 
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
- 
+
     # Schedule daily reminder at 23:00 Bangkok time
     job_queue = app.job_queue
     reminder_time = time(hour=23, minute=0, tzinfo=TIMEZONE)
     job_queue.run_daily(send_reminder, time=reminder_time)
- 
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("report", start)],
         states={
@@ -289,13 +290,13 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
- 
+
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("stats", stats))
- 
+
     logger.info("Bot started...")
     app.run_polling()
- 
- 
+
+
 if __name__ == "__main__":
     main()
